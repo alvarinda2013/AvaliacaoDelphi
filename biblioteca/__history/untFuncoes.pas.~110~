@@ -1,0 +1,401 @@
+unit untFuncoes;
+
+interface
+type
+  TDadosEndereco = record
+    Logradouro  : string;
+    Complemento : string;
+    bairro      : string;
+    UF          : string;
+    municipio   : string;
+    IBGE        : string;
+  end;
+
+  TDadosPJ = record
+    ds_RazaoSocial: String;
+    ds_Fantasia: String;
+    ds_Logradouro: string;
+    ds_Complemento: string;
+    ds_bairro: String;
+    ds_municipio: String;
+    ds_UF: string;
+    ds_CEP: string;
+    ds_telefone: String;
+    cnae: String;
+  end;
+
+function ValidarCPFCNPJ(sValue : string) : boolean;
+function ConsultarCEP(const sValue : string) : TDadosEndereco;
+function ConsultarCNPJ(const sValue : string) : TDadosPJ;
+
+function FormatarCEP(const sValue : string) : string;
+function FormatarCPFCNPJ(const sValue : string) : string;
+function FormatarTelefone(const sValue : string) : string;
+function ValidaCPF(sValue : string) : Boolean;
+function ValidaCNPJ(sValue: string) : Boolean;
+function calcdv(sValue : string) : string ;
+
+
+implementation
+  uses
+     ACBrUtil.strings, System.SysUtils, JSOn, REST.Client, System.MaskUtils, Vcl.Dialogs, Xml.XMLIntf, Xml.XMLDoc, untDM;
+
+function ValidarCPFCNPJ(sValue : string) : boolean;
+begin
+  Result := False;
+  sValue := OnlyNumber(sValue);
+
+  case Length(sValue) of
+    11: Result := validaCPF(sValue);
+    14: Result := validaCNPJ(sValue);
+  else
+    result := False;
+  end;
+end;
+
+function ConsultarCEP(const sValue : string) : TDadosEndereco;
+var
+  i: Integer;
+  tempXML, tempNodePAI, tempNodeFilho: IXMLNode;
+  XMLDocument: TXMLDocument;
+begin
+  if (Length(OnlyNumber(sValue)) <> 8) then
+    raise Exception.Create('CEP inválido. Verifique.');
+
+//  XMLDocument := TXMLDocument.Create('http://viacep.com.br/ws/' + Trim(sValue) + '/xml/');
+  try
+    try
+      XMLDocument.FileName := 'http://viacep.com.br/ws/' + Trim(sValue) + '/xml/';
+      XMLDocument.Active := True;
+      tempXML := XMLDocument.DocumentElement;
+
+      tempNodePAI := tempXML.ChildNodes.FindNode('logradouro');
+
+      if tempNodePAI = Nil then
+      begin
+        ShowMessage('Cep não encontrado.');
+        Exit;
+      end;
+
+      for i := 0 to tempNodePAI.ChildNodes.Count - 1 do
+      begin
+        tempNodeFilho := tempNodePAI.ChildNodes[i];
+        Result.Logradouro := tempNodeFilho.Text;
+      end;
+
+      tempNodePAI := tempXML.ChildNodes.FindNode('localidade');
+      for i := 0 to tempNodePAI.ChildNodes.Count - 1 do
+      begin
+        tempNodeFilho := tempNodePAI.ChildNodes[i];
+        Result.municipio := tempNodeFilho.Text;
+      end;
+
+      tempNodePAI := tempXML.ChildNodes.FindNode('bairro');
+      for i := 0 to tempNodePAI.ChildNodes.Count - 1 do
+      begin
+        tempNodeFilho := tempNodePAI.ChildNodes[i];
+        Result.bairro := tempNodeFilho.Text;
+      end;
+
+      tempNodePAI := tempXML.ChildNodes.FindNode('uf');
+      for i := 0 to tempNodePAI.ChildNodes.Count - 1 do
+      begin
+        tempNodeFilho := tempNodePAI.ChildNodes[i];
+        Result.UF := tempNodeFilho.Text;
+      end;
+
+      tempNodePAI := tempXML.ChildNodes.FindNode('ibge');
+      for i := 0 to tempNodePAI.ChildNodes.Count - 1 do
+      begin
+        tempNodeFilho := tempNodePAI.ChildNodes[i];
+        Result.IBGE := tempNodeFilho.Text;
+      end;
+
+    except
+      ShowMessage('Não foi possível localizar o cep, faça o preenchimento manual.');
+    end;
+
+
+  finally
+    FreeAndNil(XMLDocument)
+
+  end;
+
+
+end;
+
+function FormatarCEP(const sValue : string) : string;
+const
+  MascaraCEP  : string   = '00.000-000;0;_';
+begin
+  Result := FormatMaskText(MascaraCEP     , OnlyNumber(sValue));
+end;
+
+function FormatarCPFCNPJ(const sValue : string) : string;
+const
+  MascaraCPF: string = '000\.000\.000\-00;0;_';
+  MascaraCNPJ: string = '00\.000\.000\/0000\-00;0;_';
+begin
+  Result := sValue;
+  Result := OnlyNumber(Result);
+
+  case Length(sValue) of
+    09: Result := FormatMaskText(MascaraCPF, '00' + Result);
+    10: Result := FormatMaskText(MascaraCPF, '0' + Result);
+    11: Result := FormatMaskText(MascaraCPF, Result);
+    14: Result := FormatMaskText(MascaraCNPJ, Result);
+  else
+    Exit;
+  end;
+end;
+
+function ConsultarCNPJ(const sValue : string) : TDadosPJ;
+var
+  AJsonObject, AJsonSubObj: TJSONObject;
+  AJsonPair : TJSONPair;
+  AJsonArray : TJSONArray;
+  RESTClient1: TRESTClient;
+  RESTRequest1 : TRESTRequest;
+  J, i, X: Integer;
+begin
+
+  Result.ds_RazaoSocial := emptyStr;
+  Result.ds_Fantasia    := emptyStr;
+  Result.ds_Logradouro  := emptyStr;
+  Result.ds_Complemento := emptyStr;
+  Result.ds_bairro      := emptyStr;
+  Result.ds_UF          := emptyStr;
+  Result.ds_municipio   := emptyStr;
+  Result.ds_CEP         := emptyStr;
+  Result.ds_telefone    := emptyStr;
+  Result.cnae           := emptyStr;
+  RESTRequest1 := TRESTRequest.Create(nil);
+  RESTClient1 := TRESTClient.Create('https://www.receitaws.com.br/v1/cnpj');
+
+  try
+    try
+      RESTRequest1.Resource := sValue;
+      RESTRequest1.Execute;
+
+      AJsonObject := TJSONObject.ParseJSONValue
+        (TEncoding.ASCII.GetBytes(RESTRequest1.Response.JSONText), 0) as TJSONObject;
+      for i := 0 to AJsonObject.Count - 1 do
+      begin
+        AJsonArray := nil;
+        AJsonPair := AJsonObject.Pairs[i];
+
+        if AJsonPair.JsonString.Value = 'atividade_principal' then
+        begin
+          AJsonArray := (AJsonPair.JsonValue as TJSONArray);
+          for J := 0 to AJsonArray.Count - 1 do
+          begin
+            AJsonSubObj := TJSONObject(AJsonArray.Items[J]);
+            for X := 0 to AJsonSubObj.Count - 1 do
+            begin
+              AJsonPair := AJsonSubObj.Pairs[X];
+              if AJsonPair.JsonString.Value = 'code' then
+                Result.cnae := onlyNumber(AJsonPair.JsonValue.Value);
+            end;
+
+          end;
+        end
+        else
+        begin
+          if AJsonPair.JsonString.Value = 'nome' then
+            Result.ds_RazaoSocial := AJsonPair.JsonValue.Value;
+
+          if AJsonPair.JsonString.Value = 'fantasia' then
+            Result.ds_Fantasia := AJsonPair.JsonValue.Value;
+
+          if AJsonPair.JsonString.Value = 'logradouro' then
+            Result.ds_Logradouro := AJsonPair.JsonValue.Value;
+
+          if AJsonPair.JsonString.Value = 'complemento' then
+            Result.ds_Complemento := AJsonPair.JsonValue.Value;
+
+          if AJsonPair.JsonString.Value = 'bairro' then
+            Result.ds_bairro := AJsonPair.JsonValue.Value;
+
+          if AJsonPair.JsonString.Value = 'uf' then
+            Result.ds_UF := AJsonPair.JsonValue.Value;
+
+          if AJsonPair.JsonString.Value = 'municipio' then
+            Result.ds_municipio := AJsonPair.JsonValue.Value;
+
+          if AJsonPair.JsonString.Value = 'cep' then
+            Result.ds_CEP := OnlyNumber(AJsonPair.JsonValue.Value);
+
+          if AJsonPair.JsonString.Value = 'telefone' then
+            Result.ds_telefone := OnlyNumber(Copy(AJsonPair.JsonValue.Value, 1, 14));
+        end;
+      end;
+
+    except
+      on e: Exception do
+        ShowMessage('Não foi possível acessar o WebService da receita,'#13+
+                    'Os dados do cliente deverão ser preenchidos manualmente');
+    end;
+
+  finally
+    FreeAndNil(AJsonSubObj);
+    FreeAndNil(AJsonPair);
+    FreeAndNil(AJsonArray);
+    FreeAndNil(RESTClient1);
+    FreeAndNil(RESTRequest1);
+  end;
+
+end;
+
+function FormatarTelefone(const sValue : string) : string;
+const
+  MascaraTelDDD9  : string   = '(00) 00000-0000;0;_';
+  MascaraTel9     : string  =      '00000-0000;0;_';
+  MascaraTelDDD   : string   = '(00) 0000-0000;0;_';
+  MascaraTel      : string   =      '0000-0000;0;_';
+begin
+
+  Result := sValue;
+  Result := OnlyNumber(Result);
+
+  case Length(sValue) of
+  08 : Result := FormatMaskText(MascaraTel     , Result);
+  09 : Result := FormatMaskText(MascaraTel9    , Result);
+	10 : Result := FormatMaskText(MascaraTelDDD  , Result);
+	11 : Result := FormatMaskText(MascaraTelDDD9 , Result); //'(61) 3585-1859'
+  else
+    Exit;
+  end;
+end;
+
+function ValidaCPF(sValue : string) : Boolean ;
+var
+	nsum, ndig, wwi : Integer ;
+begin
+  result := true;
+  sValue := Trim(sValue);
+  wwi := Pos('.', sValue);
+  while wwi > 0 do
+  begin
+    Delete(sValue, wwi, 1);
+    wwi := Pos('.', sValue);
+  end;
+  wwi := Pos('-', sValue);
+  while wwi > 0 do
+  begin
+    Delete(sValue, wwi, 1);
+    wwi := Pos('-', sValue);
+  end;
+
+  wwi := Pos('/', sValue);
+  while wwi > 0 do
+  begin
+    Delete(sValue, wwi, 1);
+    wwi := Pos('/', sValue);
+  end;
+
+  sValue := Trim(sValue);
+  if Length(sValue) <> 11 then
+  begin
+    result := false;
+    Exit;
+  end ;
+  nSum := StrToInt(sValue[1]);
+  for wwi := 2 to 11 do if StrToInt(sValue[wwi]) <> nSum then Break;
+  if wwi > 11 then
+  begin
+    result := false;
+    Exit;
+  end;
+	nsum := 0 ;
+  for wwi := 1 to 9 do Inc(nsum, StrToInt(sValue[10 - wwi]) * (wwi + 1));
+  ndig := nsum mod 11 ;
+  if ndig < 2 then ndig := 0
+  else ndig := 11 - ndig ;
+  if ndig <> StrToInt(sValue[10]) then
+  begin
+    result := false ;
+    Exit ;
+  end ;
+  nsum := 0 ;
+  for wwi := 1 to 10 do Inc(nsum, StrToInt(sValue[11 -wwi]) * (wwi + 1));
+  ndig := nsum mod 11 ;
+  if ndig < 2 then ndig := 0
+  else ndig := 11 - ndig ;
+  if ndig <> StrToInt(sValue[11]) then result := false ;
+end ;
+
+function ValidaCNPJ(sValue: string) : Boolean;
+var
+	wwi: integer ;
+  cdv1: string ;
+begin
+	Result := true ;
+  sValue := Trim(sValue);
+  wwi := Pos('.', sValue);
+  while wwi > 0 do
+  begin
+    Delete(sValue, wwi, 1);
+    wwi := Pos('.', sValue);
+  end;
+  wwi := Pos('-', sValue);
+  while wwi > 0 do
+  begin
+    Delete(sValue, wwi, 1);
+    wwi := Pos('-', sValue);
+  end;
+  wwi := Pos('/', sValue);
+  while wwi > 0 do
+  begin
+    Delete(sValue, wwi, 1);
+    wwi := Pos('/', sValue);
+  end;
+
+  if Length(sValue) <> 14 then
+  begin
+    Result  := false ;
+    Exit ;
+  end ;
+  cdv1 := calcdv(Copy(sValue, 1, 12)) ;
+  if Copy(cdv1, 13, 1) <> Copy(sValue, 13, 1) then
+  begin
+    Result := false ;
+    Exit ;
+  end ;
+  cdv1 := calcdv(Copy(sValue, 1, 13)) ;
+  if Copy(cdv1, 14, 1) <> Copy(sValue, 14, 1) then
+   Result := false;
+end;
+
+function calcdv(sValue : string) : string;
+var
+  npos, ndig, nlen, wwi : Integer ;
+  cpar, crec: string ;
+begin
+  ndig := 0 ;
+  cpar := trim(sValue) ;
+  crec := cpar ;
+  while Length(cpar) > 0 do
+  begin
+    if Length(cpar) > 8 then
+    begin
+      sValue := Copy(cpar, Length(cpar) - 7, 8) ;
+      cpar := Copy(cpar, 1, Length(cpar) - 8) ;
+    end else begin
+     	sValue := cpar ;
+      cpar := '' ;
+    end ;
+		nlen := Length(sValue) ;
+  	npos := nlen ;
+  	for wwi := 1 to nlen do
+    begin
+			ndig := ndig + StrToInt(Copy(sValue, npos, 1)) * (wwi + 1);
+     	Dec(npos) ;
+  	end ;
+  end ;
+  ndig := ndig mod 11 ;
+  if ndig < 2 then ndig := 0
+  else ndig := 11 - ndig ;
+  calcdv := crec + IntToStr(ndig) ;
+end ;
+
+end.
